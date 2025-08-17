@@ -23,7 +23,7 @@ export const run = async () => {
         console.log("Latest block:", latestBlock.toString())
 
         // Get logs from the last 1000 blocks (adjust as needed)
-        const fromBlock = 15104050
+        const fromBlock = 15132989
 
         const toBlock = latestBlock
 
