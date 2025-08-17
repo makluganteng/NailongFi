@@ -2,7 +2,7 @@
 NailongFi make your idle assets fat
 
 What is it?
-Auto-Yield is a cross-chain vault zapper that lets users instantly deposit idle assets from any EVM wallet into high-yield vaults on Katana — with just one tap. Built with Agglayer, Katana’s DeFi primitives, and Privy for seamless onboarding, Auto-Yield abstracts away the complexity of bridging, zapping, and managing DeFi yield.
+NailongFi is a cross-chain vault zapper that lets users instantly deposit idle assets from any EVM wallet into high-yield vaults on Katana — with just one tap. Built with Agglayer, Katana’s DeFi primitives, and Privy for seamless onboarding, NailongFi abstracts away the complexity of bridging, zapping, and managing DeFi yield.
 
 ✨ What Problem Does It Solve?
 
