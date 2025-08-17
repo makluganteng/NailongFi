@@ -1,0 +1,14 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+# Katana chain configuration
+[profile.default.rpc_endpoints]
+katana = "https://rpc.tatara.katanarpc.com/"
+
+# Remove etherscan config since Katana doesn't have a standard Etherscan
+# [profile.default.etherscan]
+# katana = { key = "" }
