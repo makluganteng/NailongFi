@@ -35,7 +35,7 @@ export const run = async () => {
             topics: [
                 ethers.id("Transfer(address,address,uint256)"),
                 ethers.zeroPadValue("0x0000000000000000000000000000000000000000", 32), // from address
-                ethers.zeroPadValue("0x9f9685AE591faE60f5957093aa322F5b04Bab77C", 32)  // to address
+                ethers.zeroPadValue("0x9758163C44D813FEc380798A11CCf4531A3Fa3D3", 32)  // to address
             ],
             fromBlock,
             toBlock,
@@ -165,7 +165,7 @@ const executeToVault = async (amount: number, address: string) => {
         console.log(`Executing vault transaction with amount: ${amount}`)
 
         // Use the NailongMain contract address and ABI
-        const nailongContractAddress = "0x9f9685AE591faE60f5957093aa322F5b04Bab77C"
+        const nailongContractAddress = "0x9758163C44D813FEc380798A11CCf4531A3Fa3D3"
         const nailongAbi = [
             {
                 inputs: [{ name: 'amount', type: 'uint256' }, { name: 'user', type: 'address' }],
@@ -236,11 +236,11 @@ const executeToVault = async (amount: number, address: string) => {
 
 
 // Run every 10 minutes
-// cron.schedule('*/10 * * * *', () => {
-//     run().catch(console.error);
-// });
+cron.schedule('*/10 * * * *', () => {
+    run().catch(console.error);
+});
 
-run().catch(console.error)
+// run().catch(console.error)
 // executeToVault(1000000000000000000).catch(console.error)
 // wrapEthToWeth().catch(console.error)
 

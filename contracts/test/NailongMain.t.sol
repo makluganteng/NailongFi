@@ -18,6 +18,13 @@ contract NailongMainTest is Test {
     // Test admin
     address admin = address(0x123);
 
+    event RequestWithdraw(
+        address indexed user,
+        uint256 amount,
+        uint256 nonce,
+        uint256 timestamp
+    );
+
     function setUp() public {
         // Fork Katana mainnet
         vm.createSelectFork("https://rpc.tatara.katanarpc.com/");
@@ -36,7 +43,7 @@ contract NailongMainTest is Test {
         console.log("Vault address:", VAULT_ADDRESS);
         console.log("WETH address:", WETH_ADDRESS);
 
-        deal(address(WETH_ADDRESS), address(nailongMain), 1 ether);
+        deal(address(WETH_ADDRESS), address(nailongMain), 0.5 ether);
         // deal(address(WETH_ADDRESS), address(admin), 1 ether);
     }
 
@@ -59,7 +66,6 @@ contract NailongMainTest is Test {
 
     function test_ExecuteToVault() public {
         // First wrap some ETH to WETH
-        vm.deal(address(nailongMain), 1 ether);
 
         vm.startPrank(admin);
 
@@ -72,12 +78,31 @@ contract NailongMainTest is Test {
         // Try to execute to vault with 0.5 WETH
         uint256 amount = 0.5 ether;
 
-        nailongMain.executeToVault(amount);
+        nailongMain.executeToVault(amount, address(admin));
 
         uint256 vaultBalance = IYearnVault(VAULT_ADDRESS).balanceOf(
             address(nailongMain)
         );
         console.log("Vault balance:", vaultBalance);
+        console.log(
+            "Nailong balance:",
+            IWETH(WETH_ADDRESS).balanceOf(address(nailongMain))
+        );
+
+        vm.expectEmit(true, true, true, true);
+        emit RequestWithdraw(address(admin), amount, 0, block.timestamp);
+
+        nailongMain.requestWithdraw(
+            address(admin),
+            amount,
+            0,
+            address(admin),
+            address(WETH_ADDRESS),
+            false,
+            ""
+        );
+
+        assertEq(IWETH(WETH_ADDRESS).balanceOf(address(nailongMain)), 0);
 
         vm.stopPrank();
 

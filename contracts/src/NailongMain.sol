@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {IBridgeMessageReceiver} from "./interfaces/IBridgeMessageReceiver.sol";
 import {IBridge} from "./interfaces/IBridge.sol";
 import {IYearnVault} from "./interfaces/IYearnVault.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
 
-contract NailongMain is IBridgeMessageReceiver {
+contract NailongMain {
     struct Deposit {
         address user;
         uint256 amount;
@@ -96,39 +95,26 @@ contract NailongMain is IBridgeMessageReceiver {
         bytes memory permitData
     ) external onlyAdmin {
         // withdraw from vault
-        IYearnVault(VAULT_ADDRESS).withdraw(amount, msg.sender, address(this));
+        IYearnVault(VAULT_ADDRESS).withdraw(
+            amount,
+            address(this),
+            address(this)
+        );
+
+        IBridge(BRIDGE_ADDRESS).bridgeAsset(
+            destinationNetwork,
+            destinationAddress,
+            amount,
+            token,
+            forceUpdateGlobalExitRoot,
+            permitData
+        );
 
         //updates the user's balance
         balances[user] -= amount;
 
         // emit event
         emit RequestWithdraw(user, amount, 0, block.timestamp);
-    }
-
-    function onMessageReceived(
-        address originAddress,
-        uint32 originNetwork,
-        bytes memory data
-    ) external payable override {
-        // TODO: Implement the logic to handle the message received from the bridge
-        Deposit memory deposit = abi.decode(data, (Deposit));
-        balances[deposit.user] += deposit.amount;
-
-        // If ETH was sent with this message, wrap it to WETH
-        if (msg.value > 0) {
-            IWETH(WETH_ADDRESS).deposit{value: msg.value}();
-        }
-
-        //here it needs to deposit the funds to the vaults
-        IYearnVault(VAULT_ADDRESS).deposit(deposit.amount, deposit.user);
-
-        //here it needs to emit the event
-        emit Deposited(
-            deposit.user,
-            deposit.amount,
-            deposit.nonce,
-            deposit.timestamp
-        );
     }
 
     function checkBalance(address user) external view returns (uint256) {

@@ -26,6 +26,8 @@ export function TabbedInterface({ walletAddress }: TabbedInterfaceProps) {
     const [isDepositModalOpen, setIsDepositModalOpen] = useState(false)
     const [withdrawAmount, setWithdrawAmount] = useState('')
     const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false)
+    const [isWithdrawing, setIsWithdrawing] = useState(false)
+    const [withdrawError, setWithdrawError] = useState<string | null>(null)
 
     const { depositToKatana, isLoading: isDepositing, error: depositError, success: depositSuccess, reset: resetDeposit } = useKatanaDeposit()
 
@@ -123,12 +125,38 @@ export function TabbedInterface({ walletAddress }: TabbedInterfaceProps) {
     const handleWithdraw = async () => {
         if (!withdrawAmount || !walletAddress) return
 
+        setIsWithdrawing(true)
+        setWithdrawError(null)
+
         try {
-            // Simulate withdrawal process
             console.log('Withdrawing', withdrawAmount, 'WETH from Katana vault')
 
-            // In a real app, you would call the withdrawal function here
-            // await withdrawFromKatana({ amount: withdrawAmount, ... })
+            // Call the withdraw API
+            const response = await fetch('http://localhost:3001/api/withdraw', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    user: walletAddress,
+                    amount: withdrawAmount,
+                    destinationNetwork: 0, // Sepolia network
+                    destinationAddress: walletAddress,
+                    token: config.WETH_VAULT_BRIDGE_TOKEN, // WETH token address
+                    forceUpdateGlobalExitRoot: false,
+                    permitData: '0x'
+                })
+            });
+
+            console.log('Response:', response)
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Withdrawal failed');
+            }
+
+            const result = await response.json();
+            console.log('Withdrawal successful:', result);
 
             // Reset form and close modal
             setWithdrawAmount('')
@@ -139,11 +167,15 @@ export function TabbedInterface({ walletAddress }: TabbedInterfaceProps) {
 
         } catch (err) {
             console.error('Withdrawal failed:', err)
+            setWithdrawError(err instanceof Error ? err.message : 'Withdrawal failed')
+        } finally {
+            setIsWithdrawing(false)
         }
     }
 
     const handleWithdrawCancel = () => {
         setWithdrawAmount('')
+        setWithdrawError(null)
         setIsWithdrawModalOpen(false)
     }
 
@@ -456,21 +488,40 @@ export function TabbedInterface({ walletAddress }: TabbedInterfaceProps) {
                         </div>
                     </div>
 
+                    {/* Error Message */}
+                    {withdrawError && (
+                        <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg">
+                            <div className="text-sm text-red-600 dark:text-red-400">
+                                Error: {withdrawError}
+                            </div>
+                        </div>
+                    )}
+
                     <div className="flex gap-3 pt-4">
                         <Button
                             variant="outline"
                             onClick={handleWithdrawCancel}
+                            disabled={isWithdrawing}
                             className="flex-1"
                         >
                             Cancel
                         </Button>
                         <Button
                             onClick={handleWithdraw}
-                            disabled={!withdrawAmount || parseFloat(withdrawAmount) <= 0 || parseFloat(withdrawAmount) > (katanaNumeric || 0)}
+                            disabled={!withdrawAmount || parseFloat(withdrawAmount) <= 0 || parseFloat(withdrawAmount) > (katanaNumeric || 0) || isWithdrawing}
                             className="flex-1 bg-green-600 hover:bg-green-700"
                         >
-                            <ArrowDownToLine className="h-4 w-4 mr-2" />
-                            Withdraw WETH
+                            {isWithdrawing ? (
+                                <>
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                                    Withdrawing...
+                                </>
+                            ) : (
+                                <>
+                                    <ArrowDownToLine className="h-4 w-4 mr-2" />
+                                    Withdraw WETH
+                                </>
+                            )}
                         </Button>
                     </div>
                 </div>

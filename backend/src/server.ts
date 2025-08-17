@@ -1,9 +1,9 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { createPublicClient, http, createWalletClient, parseEther } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { ethers } from 'ethers';
 import NailongMain from './abi/NailongMain.json';
 import dotenv from 'dotenv';
+import { storeWithdrawHistory, getUserWithdrawHistory } from './supabase/supabase';
 
 // Load environment variables
 dotenv.config();
@@ -15,33 +15,22 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Initialize Viem clients
-const publicClient = createPublicClient({
-    transport: http("https://rpc.tatara.katanarpc.com/")
-});
+// Initialize Ethers clients
+const provider = new ethers.JsonRpcProvider("https://rpc.tatara.katanarpc.com/");
 
 // Contract configuration
-const CONTRACT_ADDRESS = "0x5d7F21089decc3145C603eC3cdC4D6330dE89DF2" as `0x${string}`;
+const CONTRACT_ADDRESS = "0x9758163C44D813FEc380798A11CCf4531A3Fa3D3";
 const CONTRACT_ABI = NailongMain.abi;
 
-// Get operator wallet client
-const getWalletClient = () => {
+// Get operator wallet
+const getWallet = () => {
     const operatorPrivateKey = process.env.OPERATOR_PRIVATE_KEY;
 
     if (!operatorPrivateKey) {
         throw new Error("OPERATOR_PRIVATE_KEY environment variable is not set");
     }
 
-    const cleanPrivateKey = operatorPrivateKey.startsWith('0x')
-        ? operatorPrivateKey.slice(2)
-        : operatorPrivateKey;
-
-    const account = privateKeyToAccount(`0x${cleanPrivateKey}` as `0x${string}`);
-
-    return createWalletClient({
-        account,
-        transport: http("https://rpc.tatara.katanarpc.com/")
-    });
+    return new ethers.Wallet(operatorPrivateKey, provider);
 };
 
 // Health check endpoint
@@ -53,6 +42,7 @@ app.get('/health', (req: Request, res: Response) => {
 app.post('/api/withdraw', async (req: Request, res: Response) => {
     try {
         const {
+            user,
             amount,
             destinationNetwork,
             destinationAddress,
@@ -61,15 +51,17 @@ app.post('/api/withdraw', async (req: Request, res: Response) => {
             permitData = '0x'
         } = req.body;
 
+        console.log('Request:', req.body)
+
         // Validate required fields
-        if (!amount || !destinationNetwork || !destinationAddress || !token) {
+        if (!amount || !destinationAddress || !token) {
             return res.status(400).json({
                 error: 'Missing required fields: amount, destinationNetwork, destinationAddress, token'
             });
         }
 
         // Validate amount is positive
-        if (BigInt(amount) <= 0) {
+        if (ethers.parseEther(amount) <= 0) {
             return res.status(400).json({
                 error: 'Amount must be greater than 0'
             });
@@ -91,52 +83,40 @@ app.post('/api/withdraw', async (req: Request, res: Response) => {
             permitData
         });
 
-        // Get wallet client
-        const walletClient = getWalletClient();
-        const account = walletClient.account;
+        // Get wallet
+        const wallet = getWallet();
+        const account = wallet.address;
+
+        // Create contract instance
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
         // Check if the account is admin
-        const adminAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'ADMIN_ADDRESS',
-        });
+        const adminAddress = await contract.ADMIN_ADDRESS();
 
-        if (adminAddress !== account.address) {
+        if (adminAddress !== account) {
             return res.status(403).json({
                 error: 'Unauthorized: Only admin can execute withdrawals'
             });
         }
 
         // Check vault balance
-        const vaultAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'VAULT_ADDRESS',
-        }) as `0x${string}`;
+        const vaultAddress = await contract.VAULT_ADDRESS();
+        const wethAddress = await contract.WETH_ADDRESS();
 
-        const wethAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'WETH_ADDRESS',
-        }) as `0x${string}`;
+        // Create WETH contract instance
+        const wethContract = new ethers.Contract(wethAddress, [
+            {
+                inputs: [{ name: 'account', type: 'address' }],
+                name: 'balanceOf',
+                outputs: [{ name: '', type: 'uint256' }],
+                stateMutability: 'view',
+                type: 'function'
+            }
+        ], provider);
 
-        const vaultBalance = await publicClient.readContract({
-            address: wethAddress,
-            abi: [
-                {
-                    inputs: [{ name: 'account', type: 'address' }],
-                    name: 'balanceOf',
-                    outputs: [{ name: '', type: 'uint256' }],
-                    stateMutability: 'view',
-                    type: 'function'
-                }
-            ],
-            functionName: 'balanceOf',
-            args: [vaultAddress]
-        });
+        const vaultBalance = await wethContract.balanceOf(vaultAddress);
 
-        if (vaultBalance < BigInt(amount)) {
+        if (vaultBalance < ethers.parseEther(amount)) {
             return res.status(400).json({
                 error: 'Insufficient vault balance',
                 requested: amount.toString(),
@@ -144,33 +124,43 @@ app.post('/api/withdraw', async (req: Request, res: Response) => {
             });
         }
 
-        // Simulate the contract call first
-        const { request } = await publicClient.simulateContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'requestWithdraw',
-            args: [
-                BigInt(amount),
-                destinationNetwork,
-                destinationAddress as `0x${string}`,
-                token as `0x${string}`,
-                forceUpdateGlobalExitRoot,
-                permitData as `0x${string}`
-            ],
-            account: account.address,
-        });
+        console.log('Available functions:', Object.keys(contract.interface));
 
-        // Execute the transaction
-        const hash = await walletClient.writeContract(request);
-        console.log(`Withdrawal transaction hash: ${hash}`);
+        // Execute the transaction using the contract's interface
+        const tx = await contract.requestWithdraw(
+            user,
+            ethers.parseEther(amount),
+            destinationNetwork,        // Add this back
+            destinationAddress,
+            token,
+            forceUpdateGlobalExitRoot,
+            permitData
+        );
+
+        console.log(`Withdrawal transaction hash: ${tx.hash}`);
+
+        // Store withdraw history in Supabase
+        const withdrawHistoryData = {
+            user_address: user,
+            amount: amount,
+            token_address: token,
+            transaction_hash: tx.hash,
+            destination_network: destinationNetwork
+        };
+
+        const { error: dbError } = await storeWithdrawHistory(withdrawHistoryData);
+        if (dbError) {
+            console.log('Warning: Failed to store withdraw history:', dbError);
+            // Don't fail the withdrawal if DB storage fails
+        }
 
         // Wait for transaction confirmation
-        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        const receipt = await tx.wait();
         console.log(`Transaction confirmed in block ${receipt.blockNumber}`);
 
         res.json({
             success: true,
-            transactionHash: hash,
+            transactionHash: tx.hash,
             blockNumber: receipt.blockNumber.toString(),
             message: 'Withdrawal request processed successfully'
         });
@@ -187,38 +177,28 @@ app.post('/api/withdraw', async (req: Request, res: Response) => {
 // Get vault balance endpoint
 app.get('/api/vault-balance', async (req: Request, res: Response) => {
     try {
-        const vaultAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'VAULT_ADDRESS',
-        }) as `0x${string}`;
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
 
-        const wethAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'WETH_ADDRESS',
-        }) as `0x${string}`;
+        const vaultAddress = await contract.VAULT_ADDRESS();
+        const wethAddress = await contract.WETH_ADDRESS();
 
-        const balance = await publicClient.readContract({
-            address: wethAddress,
-            abi: [
-                {
-                    inputs: [{ name: 'account', type: 'address' }],
-                    name: 'balanceOf',
-                    outputs: [{ name: '', type: 'uint256' }],
-                    stateMutability: 'view',
-                    type: 'function'
-                }
-            ],
-            functionName: 'balanceOf',
-            args: [CONTRACT_ADDRESS]
-        });
+        const wethContract = new ethers.Contract(wethAddress, [
+            {
+                inputs: [{ name: 'account', type: 'address' }],
+                name: 'balanceOf',
+                outputs: [{ name: '', type: 'uint256' }],
+                stateMutability: 'view',
+                type: 'function'
+            }
+        ], provider);
+
+        const balance = await wethContract.balanceOf(CONTRACT_ADDRESS);
 
         res.json({
             contractAddress: CONTRACT_ADDRESS,
             vaultAddress,
             wethAddress,
-            balance: parseEther(balance.toString())
+            balance: ethers.formatEther(balance)
         });
 
     } catch (error) {
@@ -233,29 +213,12 @@ app.get('/api/vault-balance', async (req: Request, res: Response) => {
 // Get contract info endpoint
 app.get('/api/contract-info', async (req: Request, res: Response) => {
     try {
-        const adminAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'ADMIN_ADDRESS',
-        });
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
 
-        const bridgeAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'BRIDGE_ADDRESS',
-        });
-
-        const vaultAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'VAULT_ADDRESS',
-        });
-
-        const wethAddress = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CONTRACT_ABI,
-            functionName: 'WETH_ADDRESS',
-        });
+        const adminAddress = await contract.ADMIN_ADDRESS();
+        const bridgeAddress = await contract.BRIDGE_ADDRESS();
+        const vaultAddress = await contract.VAULT_ADDRESS();
+        const wethAddress = await contract.WETH_ADDRESS();
 
         res.json({
             contractAddress: CONTRACT_ADDRESS,
@@ -274,6 +237,42 @@ app.get('/api/contract-info', async (req: Request, res: Response) => {
     }
 });
 
+// Get user's withdraw history endpoint
+app.get('/api/withdraw-history/:userAddress', async (req: Request, res: Response) => {
+    try {
+        const { userAddress } = req.params;
+
+        // Validate address format
+        if (!/^0x[a-fA-F0-9]{40}$/.test(userAddress)) {
+            return res.status(400).json({
+                error: 'Invalid user address format'
+            });
+        }
+
+        const { data, error } = await getUserWithdrawHistory(userAddress);
+
+        if (error) {
+            return res.status(500).json({
+                error: 'Database error',
+                message: error.message
+            });
+        }
+
+        res.json({
+            success: true,
+            withdrawHistory: data || [],
+            message: 'Withdraw history retrieved successfully'
+        });
+
+    } catch (error) {
+        console.error('Error fetching withdraw history:', error);
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error instanceof Error ? error.message : 'Unknown error occurred'
+        });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
@@ -281,6 +280,7 @@ app.listen(PORT, () => {
     console.log(`💸 Withdrawal endpoint: http://localhost:${PORT}/api/withdraw`);
     console.log(`💰 Vault balance: http://localhost:${PORT}/api/vault-balance`);
     console.log(`📋 Contract info: http://localhost:${PORT}/api/contract-info`);
+    console.log(`📜 Withdraw history: http://localhost:${PORT}/api/withdraw-history/:userAddress`);
 });
 
 export default app; 
